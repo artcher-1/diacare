@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>DiaCare DSS - Умный контроль диабета и расчет инсулина</title>
+  
+  <!-- PWA Meta -->
+  <meta name="theme-color" content="#0d1322">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Tailwind CSS & Google Fonts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50: '#f8fafc', 500: '#64748b', 600: '#475569', 700: '#334155' }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-[#0b101d] text-slate-200 min-h-screen font-['Inter'] antialiased selection:bg-slate-700 selection:text-white pb-24 md:pb-8">
+
+  <!-- Родительский баннер (Guest Mode) -->
+  <div id="guestModeBanner" class="hidden bg-slate-800 text-slate-200 border-b border-slate-700 px-4 py-2 text-xs font-medium flex items-center justify-between sticky top-0 z-50">
+    <div class="flex items-center space-x-2">
+      <span class="text-sm">👁️</span>
+      <span>Режим наблюдателя (Родительский доступ): Только просмотр</span>
+    </div>
+    <span class="bg-slate-700 text-slate-300 px-2 py-0.5 rounded text-[10px]">Read-Only</span>
+  </div>
+
+  <!-- Header в спокойных тонах -->
+  <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <div class="flex items-center space-x-2.5">
+        <div class="w-7 h-7 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-slate-300 text-xs">
+          D+
+        </div>
+        <div>
+          <h1 class="text-sm font-semibold tracking-tight text-slate-200 flex items-center space-x-2">
+            <span>DiaCare DSS</span>
+            <span id="mainSyncDot" class="w-2 h-2 rounded-full bg-slate-600" title="Статус CGM"></span>
+            <span id="lastSyncLabel" class="text-[10px] text-slate-400 font-mono hidden sm:inline"></span>
+          </h1>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-2">
+        <button onclick="syncNightscoutData(true)" class="p-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-300 border border-slate-700/60 transition" title="Обновить данные сейчас">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+        </button>
+
+        <button onclick="generateGuestShareLink()" class="px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-xs text-slate-300 font-medium transition flex items-center space-x-1.5 border border-slate-700/60" title="Поделиться доступом с родителем">
+          <i data-lucide="share-2" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span class="hidden sm:inline">Для родителя</span>
+        </button>
+
+        <button onclick="switchTab('settingsTab')" class="p-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-300 border border-slate-700/60 transition">
+          <i data-lucide="settings" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Основной контейнер -->
+  <main class="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+
+    <!-- ================================================================= -->
+    <!-- ВКЛАДКА 1: ГЛАВНЫЙ ЭКРАН (ГРАФИК И ПРЕДИКТИВНЫЙ ДАШБОРД) -->
+    <!-- ================================================================= -->
+    <div id="dashboardTab" class="space-y-4 sm:space-y-5">
+      
+      <!-- Карточки верхнего ряда -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        
+        <!-- Большое значение сахара + тренд -->
+        <div class="md:col-span-2 p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 relative backdrop-blur-sm">
+          <div class="flex items-start justify-between">
+            <div>
+              <span class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Текущий сахар CGM</span>
+              <div class="flex items-baseline space-x-2.5 mt-1">
+                <span id="currentBgValue" class="text-5xl md:text-6xl font-extrabold text-slate-500">--</span>
+                <span class="text-slate-400 text-sm font-medium">ммоль/л</span>
+              </div>
+            </div>
+
+            <div class="text-right">
+              <span id="currentStatusBadge" class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                Ожидание данных
+              </span>
+              <div id="currentTrendArrow" class="text-xs font-semibold text-slate-300 mt-2 flex items-center justify-end space-x-1">
+                → Стабильно
+              </div>
+              <div id="currentTrendRate" class="text-[10px] text-slate-400 font-mono mt-0.5">
+                0.00 ммоль/л за 5 мин
+              </div>
+            </div>
+          </div>
+
+          <!-- Нижняя панелька: IOB, COB, Время -->
+          <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-800/80 text-center">
+            <div class="p-2 rounded-xl bg-slate-800/30 border border-slate-800/50">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">Активный инс. (IOB)</div>
+              <div id="activeIobValue" class="text-sm font-bold text-slate-200 font-mono mt-0.5">0.00 ед</div>
+            </div>
+            <div class="p-2 rounded-xl bg-slate-800/30 border border-slate-800/50">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">Активные угл. (COB)</div>
+              <div id="activeCobValue" class="text-sm font-bold text-slate-200 font-mono mt-0.5">0 г</div>
+            </div>
+            <div class="p-2 rounded-xl bg-slate-800/30 border border-slate-800/50">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">Замер сенсора</div>
+              <div id="lastUpdatedTime" class="text-sm font-medium text-slate-400 font-mono mt-0.5">--:--</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Подключение Nightscout / xDrip -->
+        <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-slate-300 uppercase tracking-wider flex items-center space-x-1.5">
+                <i data-lucide="radio" class="w-3.5 h-3.5 text-slate-400"></i>
+                <span>Связка с xDrip / Nightscout</span>
+              </span>
+              <span id="syncStatusBadge" class="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-800 text-slate-400">
+                Не подключено
+              </span>
+            </div>
+
+            <p class="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
+              Вставьте адрес вашего Nightscout или xDrip:
+            </p>
+
+            <div class="space-y-2">
+              <input id="dashNsUrl" type="url" placeholder="https://my-site.fly.dev" 
+                     onkeydown="if(event.key==='Enter') saveNightscoutSettingsAndConnect()"
+                     class="w-full px-3 py-1.5 rounded-xl bg-slate-800/70 border border-slate-700/80 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-500">
+              
+              <input id="dashNsToken" type="password" placeholder="API Secret или Токен (если есть)" 
+                     onkeydown="if(event.key==='Enter') saveNightscoutSettingsAndConnect()"
+                     class="w-full px-3 py-1.5 rounded-xl bg-slate-800/70 border border-slate-700/80 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-500">
+              
+              <button onclick="saveNightscoutSettingsAndConnect()" class="w-full py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded-xl text-xs font-medium transition flex items-center justify-center space-x-1.5 border border-slate-600">
+                <i data-lucide="link" class="w-3.5 h-3.5"></i>
+                <span>Подключить и синхронизировать</span>
+              </button>
+
+              <div id="syncErrorText" class="text-[11px] text-rose-300 bg-rose-950/20 p-2 rounded-lg border border-rose-500/20 hidden"></div>
+            </div>
+          </div>
+
+          <!-- Ручной замер с глюкометра -->
+          <div class="mt-3 pt-2.5 border-t border-slate-800/80 patient-only-control">
+            <span class="text-[10px] text-slate-400 block mb-1">Ручной замер глюкометра (ммоль/л):</span>
+            <div class="flex space-x-1.5">
+              <input id="manualBgInput" type="number" step="0.1" min="1.5" max="30" placeholder="6.2" 
+                     class="flex-1 px-2.5 py-1 rounded-lg bg-slate-800/70 border border-slate-700/80 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none">
+              <button onclick="injectManualBgEntry(document.getElementById('manualBgInput').value)" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition">
+                Записать
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- БАННЕР УМНОГО СОВЕТА (АВТОМАТИЧЕСКИ: ГИПО ИЛИ ГИПЕР) -->
+      <div id="smartAdviceContainer"></div>
+
+      <!-- ГРАФИК САХАРА И ПРОГНОЗ ТРАЕКТОРИИ -->
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-3 mb-2 border-b border-slate-800/80 gap-2">
+          <div>
+            <h2 class="text-xs font-semibold text-slate-200 flex items-center space-x-2">
+              <span>График сахара крови & Будущая траектория</span>
+            </h2>
+            <p class="text-[11px] text-slate-400 mt-0.5">Пунктирная линия — прогноз на 90 минут с учетом активного IOB и еды COB</p>
+          </div>
+          <div class="flex items-center space-x-3 text-xs">
+            <span class="inline-flex items-center space-x-1 text-slate-400 text-[11px]">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+              <span>Целевой (3.9 - 7.8)</span>
+            </span>
+            <span class="inline-flex items-center space-x-1 text-slate-400 text-[11px]">
+              <span class="w-2 h-2 rounded-full bg-indigo-400 inline-block"></span>
+              <span>Прогноз</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="h-64 sm:h-72 w-full relative">
+          <canvas id="glucoseChart"></canvas>
+        </div>
+      </div>
+
+      <!-- ПОСЛЕДНИЕ СОБЫТИЯ / ИНЪЕКЦИИ И ПРИЕМЫ ПИЩИ -->
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Недавние инъекции и приемы пищи</h3>
+          <button onclick="switchTab('calculatorTab')" class="text-xs text-slate-300 hover:text-white font-medium patient-only-control">
+            + Новый расчет
+          </button>
+        </div>
+        <div id="recentTreatmentsList" class="space-y-1.5"></div>
+      </div>
+
+    </div>
+
+
+    <!-- ================================================================= -->
+    <!-- ВКЛАДКА 2: КАЛЬКУЛЯТОР БОЛЮСА (СКОЛЬКО ВКОЛОТЬ + ПАУЗА + КОРЗИНА) -->
+    <!-- ================================================================= -->
+    <div id="calculatorTab" class="hidden space-y-5">
+      
+      <!-- Карточка итогового расчета -->
+      <div class="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 relative">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Результат точного расчета</span>
+            <div class="flex items-baseline space-x-2 mt-1">
+              <span id="calcImmediateBolus" class="text-4xl font-extrabold text-slate-100">0.0 ед</span>
+              <span class="text-slate-400 text-xs font-medium">быстрого инсулина</span>
+            </div>
+            <div id="calcExtendedBolus" class="text-xs text-amber-300/90 font-medium mt-1 hidden"></div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2.5">
+            <div class="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60 text-center min-w-[110px]">
+              <span class="text-[10px] text-slate-400 uppercase font-semibold block">Пауза до еды</span>
+              <span id="calcRecommendedPause" class="text-lg font-bold text-amber-300/90 font-mono block mt-0.5">15 мин</span>
+              <span class="text-[9px] text-slate-500">до приема пищи</span>
+            </div>
+
+            <div class="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60 text-center min-w-[110px]">
+              <span class="text-[10px] text-slate-400 uppercase font-semibold block">Углеводы</span>
+              <span id="calcTotalCarbs" class="text-lg font-bold text-emerald-400 font-mono block mt-0.5">0 г</span>
+              <span id="calcTotalXe" class="text-[9px] text-slate-400">0.0 ХЕ</span>
+            </div>
+
+            <div class="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60 text-center min-w-[100px]">
+              <span class="text-[10px] text-slate-400 uppercase font-semibold block">Белки + Жиры</span>
+              <span id="calcTotalFpu" class="text-lg font-bold text-slate-300 font-mono block mt-0.5">0.0 БЖЕ</span>
+              <span class="text-[9px] text-slate-500">Варшавский алг.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <p class="text-xs text-slate-400">
+            Расчет учитывает: сахар с сенсора, стрелку скорости, активный IOB, белки и жиры.
+          </p>
+          <button onclick="commitCurrentMeal()" class="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 font-semibold text-xs transition flex items-center justify-center space-x-2 border border-slate-600">
+            <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i>
+            <span>Зафиксировать инъекцию и еду</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Секция продуктов: Выбранное + Каталог открытой БД -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        
+        <!-- Левая колонка: Корзина выбранного блюда -->
+        <div class="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center space-x-1.5">
+              <i data-lucide="shopping-bag" class="w-3.5 h-3.5 text-slate-400"></i>
+              <span>Состав приема пищи</span>
+            </h3>
+            <button onclick="currentMealCart = []; renderMealCart(); calculateMealBolus();" class="text-[11px] text-slate-400 hover:text-slate-200">Очистить</button>
+          </div>
+
+          <div id="mealCartItems" class="space-y-1.5 min-h-[140px]"></div>
+        </div>
+
+        <!-- Правая колонка: Открытая БД продуктов с поиском и фильтрами -->
+        <div class="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center space-x-1.5">
+              <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400"></i>
+              <span>База продуктов (Фастфуд, Oreo, Домашняя)</span>
+            </h3>
+            <button onclick="openAddCustomFoodModal()" class="text-[11px] text-slate-300 hover:text-white font-medium">
+              + Свой продукт
+            </button>
+          </div>
+
+          <!-- Поле быстрого поиска продуктов -->
+          <div class="relative">
+            <input id="foodSearchInput" oninput="renderFoodDatabaseList(this.value)" type="text" 
+                   placeholder="Начните вводить: картошка фри, орео, курица, пицца, яблоко..." 
+                   class="w-full px-3 py-2 pl-8 rounded-xl bg-slate-800/70 border border-slate-700/80 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-500">
+            <i data-lucide="search" class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5"></i>
+          </div>
+
+          <!-- Категории-фильтры -->
+          <div class="flex flex-wrap gap-1.5 pt-0.5">
+            <button onclick="setFoodCategory('all')" data-cat="all" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-700 text-slate-100 border border-slate-600">Все</button>
+            <button onclick="setFoodCategory('fastfood')" data-cat="fastfood" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-slate-800">Фастфуд / Мак</button>
+            <button onclick="setFoodCategory('snacks')" data-cat="snacks" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-slate-800">Сладости / Oreo</button>
+            <button onclick="setFoodCategory('meat')" data-cat="meat" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-slate-800">Курица и мясо</button>
+            <button onclick="setFoodCategory('meals')" data-cat="meals" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-slate-800">Блюда / Пицца</button>
+            <button onclick="setFoodCategory('grains')" data-cat="grains" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-slate-800">Гарниры</button>
+            <button onclick="setFoodCategory('fruits')" data-cat="fruits" class="category-pill px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-slate-800">Фрукты</button>
+          </div>
+
+          <!-- Список продуктов -->
+          <div id="foodCatalogList" class="space-y-1.5 max-h-72 overflow-y-auto pr-1"></div>
+        </div>
+
+      </div>
+
+    </div>
+
+
+    <!-- ================================================================= -->
+    <!-- ВКЛАДКА 3: ДНЕВНИК КБЖУ (СЕГОДНЯ VS ВЧЕРА) -->
+    <!-- ================================================================= -->
+    <div id="nutritionTab" class="hidden space-y-5">
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
+        <h2 class="text-xs font-semibold text-slate-200 flex items-center space-x-1.5 mb-1">
+          <i data-lucide="pie-chart" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>Сравнение баланса питания: Сегодня vs Вчера</span>
+        </h2>
+        <p class="text-[11px] text-slate-400 mb-5">Калькулятор суточного потребления КБЖУ и хлебных единиц</p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Сегодня -->
+          <div class="p-4 rounded-xl bg-slate-800/40 border border-slate-700/60 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Сегодня</span>
+              <span id="todayKcal" class="text-xl font-bold text-slate-100 font-mono">0</span>
+              <span class="text-xs text-slate-400 -ml-8">ккал</span>
+            </div>
+
+            <div class="space-y-1.5 pt-1 text-xs">
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Углеводы:</span>
+                <span id="todayCarbs" class="font-semibold text-slate-200 font-mono">0 г</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Хлебные единицы (ХЕ):</span>
+                <span id="todayXe" class="font-semibold text-slate-200 font-mono">0.0 ХЕ</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Белки:</span>
+                <span id="todayProt" class="font-semibold text-slate-300 font-mono">0 г</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Жиры:</span>
+                <span id="todayFats" class="font-semibold text-slate-300 font-mono">0 г</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Вчера -->
+          <div class="p-4 rounded-xl bg-slate-800/30 border border-slate-800/80 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Вчера</span>
+              <span id="yestKcal" class="text-xl font-bold text-slate-400 font-mono">0</span>
+              <span class="text-xs text-slate-500 -ml-8">ккал</span>
+            </div>
+
+            <div class="space-y-1.5 pt-1 text-xs">
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Углеводы:</span>
+                <span id="yestCarbs" class="font-medium text-slate-300 font-mono">0 г</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Хлебные единицы (ХЕ):</span>
+                <span id="yestXe" class="font-medium text-slate-300 font-mono">0.0 ХЕ</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Белки:</span>
+                <span id="yestProt" class="font-medium text-slate-400 font-mono">0 г</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Жиры:</span>
+                <span id="yestFats" class="font-medium text-slate-400 font-mono">0 г</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ================================================================= -->
+    <!-- ВКЛАДКА 4: НАСТРАИВАЕМЫЙ ПРОФИЛЬ ПАЦИЕНТА -->
+    <!-- ================================================================= -->
+    <div id="profileTab" class="hidden space-y-5">
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 space-y-4">
+        <div>
+          <h2 class="text-xs font-semibold text-slate-200 flex items-center space-x-1.5">
+            <i data-lucide="user-check" class="w-3.5 h-3.5 text-slate-400"></i>
+            <span>Метаболический профиль & Параметры дозирования</span>
+          </h2>
+          <p class="text-[11px] text-slate-400 mt-0.5">
+            Физиологические параметры, используемые для расчета болюса, чувствительности и времени действия инсулина.
+          </p>
+        </div>
+
+        <form id="profileForm" onsubmit="event.preventDefault(); saveProfileFromForm();" class="space-y-4">
+          <!-- Физиология -->
+          <div class="p-3.5 rounded-xl bg-slate-800/30 border border-slate-800/60 space-y-2.5">
+            <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">1. Физиология и параметры тела</span>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+              <div>
+                <label class="text-slate-400 block mb-1">Вес (кг)</label>
+                <input id="profWeight" type="number" step="0.5" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Рост (см)</label>
+                <input id="profHeight" type="number" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Возраст (лет)</label>
+                <input id="profAge" type="number" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Пол</label>
+                <select id="profGender" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200">
+                  <option value="male">Мужской</option>
+                  <option value="female">Женский</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Инсулинотерапия и ХЕ -->
+          <div class="p-3.5 rounded-xl bg-slate-800/30 border border-slate-800/60 space-y-2.5">
+            <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">2. Инсулинотерапия и Хлебные Единицы</span>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+              <div>
+                <label class="text-slate-400 block mb-1">Быстрый инсулин</label>
+                <select id="profFastInsulin" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200">
+                  <option value="Novorapid">Новорапид (Novorapid)</option>
+                  <option value="Fiasp">Фиасп (Fiasp - сверхбыстрый)</option>
+                  <option value="Humalog">Хумалог (Humalog)</option>
+                  <option value="Apidra">Апидра (Apidra)</option>
+                  <option value="Lyumjev">Люмджев (Lyumjev)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Базальный инсулин</label>
+                <select id="profBasalInsulin" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200">
+                  <option value="Lantus">Лантус (Lantus)</option>
+                  <option value="Tresiba">Тресиба (Tresiba)</option>
+                  <option value="Toujeo">Туджео (Toujeo)</option>
+                  <option value="Levemir">Левемир (Levemir)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-slate-300 font-medium block mb-1">Граммов в 1 ХЕ (по дефолту 12)</label>
+                <input id="profCarbsInXe" type="number" step="1" min="8" max="15" value="12" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-100">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs pt-1">
+              <div>
+                <label class="text-slate-400 block mb-1">Суточная доза TDD (ед)</label>
+                <input id="profTdd" type="number" step="1" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Время действия DIA (ч)</label>
+                <input id="profDia" type="number" step="0.5" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Цель минимум (ммоль/л)</label>
+                <input id="profTargetLow" type="number" step="0.1" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Цель максимум (ммоль/л)</label>
+                <input id="profTargetHigh" type="number" step="0.1" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+            </div>
+          </div>
+
+          <!-- Почасовые ICR -->
+          <div class="p-3.5 rounded-xl bg-slate-800/30 border border-slate-800/60 space-y-2.5">
+            <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">3. Углеводные коэффициенты ICR (г на 1 ед)</span>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+              <div>
+                <label class="text-slate-400 block mb-1">Утро (06-11ч)</label>
+                <input id="profIcrMorning" type="number" step="0.5" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Обед (11-17ч)</label>
+                <input id="profIcrLunch" type="number" step="0.5" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Ужин (17-23ч)</label>
+                <input id="profIcrDinner" type="number" step="0.5" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Ночь (23-06ч)</label>
+                <input id="profIcrNight" type="number" step="0.5" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 font-mono text-slate-200">
+              </div>
+            </div>
+          </div>
+
+          <div class="flex justify-end pt-1">
+            <button type="submit" class="px-5 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-medium transition border border-slate-600">
+              Сохранить настройки профиля
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+
+    <!-- ================================================================= -->
+    <!-- ВКЛАДКА 5: СВЯЗКА С XDRIP+ / NIGHTSCOUT И НАСТРОЙКИ -->
+    <!-- ================================================================= -->
+    <div id="settingsTab" class="hidden space-y-5">
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 space-y-3.5">
+        <h2 class="text-xs font-semibold text-slate-200 flex items-center space-x-1.5">
+          <i data-lucide="radio" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>Связка с xDrip+ и Nightscout</span>
+        </h2>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Адрес вашего Nightscout сервиса (Fly.io, Heroku, 10be.de или прямой адрес xDrip Web Service):
+        </p>
+
+        <div class="space-y-2.5 pt-1 text-xs">
+          <div>
+            <label class="text-slate-300 block mb-1 font-medium">Nightscout URL</label>
+            <input id="settingsNsUrl" type="url" placeholder="https://ваш-сайт.fly.dev" class="w-full px-3 py-2 rounded-xl bg-slate-800/70 border border-slate-700/80 font-mono text-slate-200">
+          </div>
+          <div>
+            <label class="text-slate-300 block mb-1 font-medium">API Secret / Токен (если сайт защищен)</label>
+            <input id="settingsNsToken" type="password" placeholder="Токен доступа" class="w-full px-3 py-2 rounded-xl bg-slate-800/70 border border-slate-700/80 font-mono text-slate-200">
+          </div>
+          <button onclick="saveNightscoutSettingsAndConnect()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded-xl text-xs font-medium transition flex items-center space-x-1.5 border border-slate-600">
+            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+            <span>Сохранить и подключиться</span>
+          </button>
+        </div>
+
+        <div class="p-3.5 rounded-xl bg-slate-800/40 border border-slate-700/60 text-xs text-slate-300 space-y-1.5 mt-3">
+          <span class="font-medium text-slate-200 block">Инструкция для xDrip+ на телефоне:</span>
+          <ol class="list-decimal list-inside space-y-1 text-slate-400 text-[11px]">
+            <li>В xDrip+ откройте <b>Настройки</b> &rarr; <b>Облачная синхронизация</b> &rarr; <b>Синхронизация Nightscout (REST-API)</b>.</li>
+            <li>Включите флажок <b>Отправлять данные на сервер</b>.</li>
+            <li>Укажите базовый адрес вашего облака и токен.</li>
+            <li>Эту же ссылку вставьте в поле выше и нажмите «Подключить».</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Нижняя панель навигации для мобильных устройств -->
+  <nav class="fixed bottom-0 left-0 right-0 h-16 bg-slate-900/90 backdrop-blur-md border-t border-slate-800/80 flex items-center justify-around px-2 z-40">
+    <button id="btn_dashboardTab" onclick="switchTab('dashboardTab')" class="flex flex-col items-center justify-center p-2 rounded-xl text-slate-100 bg-slate-800 transition">
+      <i data-lucide="activity" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-1">График</span>
+    </button>
+    <button id="btn_calculatorTab" onclick="switchTab('calculatorTab')" class="flex flex-col items-center justify-center p-2 rounded-xl text-slate-400 hover:text-slate-200 transition">
+      <i data-lucide="calculator" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-1">Калькулятор</span>
+    </button>
+    <button id="btn_nutritionTab" onclick="switchTab('nutritionTab')" class="flex flex-col items-center justify-center p-2 rounded-xl text-slate-400 hover:text-slate-200 transition">
+      <i data-lucide="utensils" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-1">КБЖУ</span>
+    </button>
+    <button id="btn_profileTab" onclick="switchTab('profileTab')" class="flex flex-col items-center justify-center p-2 rounded-xl text-slate-400 hover:text-slate-200 transition patient-only-control">
+      <i data-lucide="user" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-1">Профиль</span>
+    </button>
+  </nav>
+
+  <!-- Всплывающее уведомление (Toast) -->
+  <div id="toastNotification" class="fixed bottom-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl shadow-lg z-50 text-xs font-medium backdrop-blur-md transition-all duration-300 opacity-0 pointer-events-none bg-slate-800/95 text-slate-100 border border-slate-700"></div>
+
+  <!-- База данных продуктов и скрипт приложения -->
+  <script src="food_db.js"></script>
+  <script src="app.js"></script>
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>
